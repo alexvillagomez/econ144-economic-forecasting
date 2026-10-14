@@ -1,0 +1,295 @@
+---
+title: "Project 3"
+author: "Alex Villagomez"
+date: "2026-03-13"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    code_folding: show
+
+---
+**Introduction**
+
+I am researching the relationship between MLB payroll over time as well as payroll relationship to wins. I will be using data collected from https://www.stevetheump.com/Payrolls.htm, as well as https://www.baseball-reference.com. I have 20 years of data from 2006-2025.
+
+MLB payrolls have been increasing over time as players are getting paid more and more with record contracts, the highest payroll in the MLB currently is the Dodgers, whose payroll is more than two times the median MLB payroll. They have also won the last 2 MLB titles. I would like to investigate the trend of the total MLB payroll as well as explore this relationship while considering things like past years statistics.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(fable)
+library(stats)
+require(graphics)
+library(dynlm)
+library(tsibble)
+library(vars)
+library(strucchange)
+library(forecastHybrid)
+library(prophet)
+library(fable.prophet)
+```
+
+**Data**
+
+```{r}
+wins_data=read_excel("../../data/mlb_data.xlsx", sheet="Wins")
+payroll_data=read_excel("../../data/mlb_data.xlsx", sheet="Payroll")
+OPS_data=read_excel("../../data/mlb_data.xlsx", sheet="OPS")
+ERA_data=read_excel("../../data/mlb_data.xlsx", sheet="ERA")
+head(wins_data)
+head(payroll_data)
+head(OPS_data)
+head(ERA_data)
+```
+
+```{r}
+# Scale row 6 (2020 season) by 162/60; keep rest unchanged. Then make entire dataset a time series.
+wins_ts <- wins_data |>
+  pivot_longer(-Year, names_to = "Team", values_to = "Wins") |>
+  mutate(Wins = if_else(Year == 2020, Wins * (162 / 60), Wins)) |>
+  as_tsibble(key = Team, index = Year)
+
+payroll_ts <- payroll_data |>
+    pivot_longer(-Year, names_to = "Team", values_to = "Payroll") |>
+    mutate(Payroll = if_else(Year == 2020, Payroll * (162 / 60), Payroll)) |>
+    as_tsibble(key = Team, index = Year)
+
+OPS_ts <- OPS_data |>
+    pivot_longer(-Year, names_to = "Team", values_to = "OPS") |>
+    as_tsibble(key = Team, index = Year)
+
+ERA_ts <- ERA_data |>
+    pivot_longer(-Year, names_to = "Team", values_to = "ERA") |>
+    as_tsibble(key = Team, index = Year)
+
+autoplot(wins_ts)
+payroll_ts |> filter(Team == "Total") |> autoplot()
+
+```
+
+Here I have gathered the data that I am going to use. Wins in a season, Payroll, OPS, and ERA in a season for each team. I will be focusing my investigation on the total MLB payroll which I have plotted. There is a clear upward trend, with some variation in the data.
+
+**Results**
+
+```{r}
+# Get year range from data (e.g. payroll_total or any tsibble with Year)
+payroll_total <- payroll_ts |> filter(Team == "Total")
+years <- sort(unique(payroll_total$Year))
+train_years <- years[1:14]
+test_years <- years[15:length(years)]
+
+payroll_train <- payroll_total |> filter(Year %in% train_years)
+payroll_test <- payroll_total |> filter(Year %in% test_years)
+```
+
+First, I am going to split into the train and test data which I will use to train and test a variety of models.
+
+**ARIMA**
+```{r}
+# Best ARIMA on train data (auto.arima selects order)
+payroll_arima_fit <- auto.arima(payroll_train$Payroll)
+summary(payroll_arima_fit)
+```
+
+```{r}
+# Forecast test horizon and get accuracy vs test data
+payroll_arima_fc <- forecast(payroll_arima_fit, h = length(test_years))
+# Summary of ARIMA on test data (RMSE, MAE, etc.)
+accuracy(payroll_arima_fc, payroll_test$Payroll)
+plot(payroll_arima_fc, payroll_test$Payroll)
+```
+
+I used auto.arima on the total MLB payroll data. It chose an ARIMA(0,1,0) with drift, which is a random walk with drift (the data has been differenced once). The forecast shows an upward trend and the test data has a MAPE of 5.23% which is the mean absolute percent error, or that the error was on average 5% off from the predicted value.
+
+**ETS**
+```{r}
+payroll_ets_fit <- ets(payroll_train$Payroll)
+summary(payroll_ets_fit)
+```
+
+```{r}
+payroll_ets_fc <- forecast(payroll_ets_fit, h = length(test_years))
+accuracy(payroll_ets_fc, payroll_test$Payroll)
+plot(payroll_ets_fc, payroll_test$Payroll)
+```
+
+ETS was very similar to the ARIMA in terms of errors, having MAPE on the test data of 5.01%, slightly beating it out. ETS fitted a model with multiplicative errors, additive trend, and no seasonality.
+
+**Holt-Winters**
+```{r, error = TRUE}
+payroll_hw_fit <- hw(payroll_train$Payroll)
+summary(payroll_hw_fit)
+```
+
+```{r, error = TRUE}
+payroll_hw_fc <- forecast(payroll_hw_fit, h = length(test_years))
+accuracy(payroll_hw_fc, payroll_test$Payroll)
+plot(payroll_hw_fc, payroll_test$Payroll)
+```
+
+The Holt-Winters cannot be estimated because the data is annual (frequency of 1), so there is no seasonal component in the data. 
+
+**NNETAR**
+```{r}
+# fable: tsibble + model(NNETAR(Payroll)), no transformation
+set.seed(144)
+payroll_nnetar_fit <- payroll_train |>
+  model(NNETAR(Payroll))
+payroll_nnetar_fit
+```
+
+```{r}
+payroll_nnetar_fit |>
+  forecast(h = length(test_years)) |>
+  autoplot(payroll_train, level = NULL) +
+  labs(x = "Year", y = "Payroll", title = "Payroll total: NNETAR forecast")
+```
+
+```{r}
+payroll_nnetar_fc <- payroll_nnetar_fit |> forecast(h = length(test_years))
+accuracy(payroll_nnetar_fc, payroll_test)
+```
+
+NNETAR fitted a NNAR(1,1) which has 1 lag and 1 node. NNETAR did not perform well in terms of MAPE, where the test MAPE was 12.1%, far worse than other models seen so far, for this reason I will likely not use it in my combined forecast.
+
+**Prophet**
+
+```{r}
+# fable.prophet: fit Prophet inside model() like ARIMA/ETS (annual data: no season term)
+payroll_prophet_fit <- payroll_train |>
+  model(prophet = prophet(Payroll))
+payroll_prophet_fit
+```
+
+```{r}
+# Forecast and plot (same pattern as other models)
+payroll_prophet_fc <- payroll_prophet_fit |> forecast(h = length(test_years))
+payroll_prophet_fc |> autoplot(payroll_train, level = NULL)
+# Accuracy vs test
+accuracy(payroll_prophet_fc, payroll_test)
+```
+
+Prophet performed well with a MAPE of 5.7% and looked to be very similar to both ARIMA and ETS in terms of a forecast.
+
+**All models: one-year-ahead forecast (2026)**
+
+Here is a plot of how all of the models would predict a 2026 payroll data, trained on the entire dataset from 2006-2025.
+
+```{r}
+fc_year <- max(payroll_total$Year) + 1
+set.seed(144)
+
+arima_fc1   <- forecast(auto.arima(payroll_total$Payroll), h = 1)$mean[1]
+ets_fc1     <- forecast(ets(payroll_total$Payroll), h = 1)$mean[1]
+nnetar_fc1  <- (payroll_total |> model(NNETAR(Payroll)) |> forecast(h = 1))$.mean[1]
+prophet_fc1 <- (payroll_total |> model(prophet = prophet(Payroll)) |> forecast(h = 1))$.mean[1]
+
+fc_tbl <- tibble(
+  Model = c("ARIMA", "ETS", "NNETAR", "Prophet"),
+  Year = fc_year,
+  Payroll = c(arima_fc1, ets_fc1, nnetar_fc1, prophet_fc1)
+)
+ggplot() +
+  geom_line(data = payroll_total, aes(x = Year, y = Payroll), linewidth = 0.8, colour = "gray40") +
+  geom_point(data = fc_tbl, aes(x = Year, y = Payroll, colour = Model), size = 4) +
+  labs(x = "Year", y = "Payroll", title = "Payroll total: one-year-ahead forecast (2026)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+**Forecast Combination**
+
+For a combined forecast, since Prophet, ARIMA, and ETS all performed similarly and well, I will be using a combination of the three of them to forecast one year ahead for 2026 payrolls. For weights, I will use equal weights between them.
+
+```{r}
+w_equal <- c(ARIMA = 1/3, ETS = 1/3, Prophet = 1/3)
+# 2026 forecast from equal-weight combination
+equal_weight_fc_2026 <- w_equal["ARIMA"] * arima_fc1 + w_equal["ETS"] * ets_fc1 + w_equal["Prophet"] * prophet_fc1
+# Add to plot
+fc_tbl <- bind_rows(
+  fc_tbl,
+  tibble(Model = "Equal (1/3 each)", Year = fc_year, Payroll = as.numeric(equal_weight_fc_2026))
+)
+ggplot() +
+  geom_line(data = payroll_total, aes(x = Year, y = Payroll), linewidth = 0.8, colour = "gray40") +
+  geom_point(data = fc_tbl, aes(x = Year, y = Payroll, colour = Model), size = 4) +
+  labs(x = "Year", y = "Payroll", title = "Payroll total: one-year-ahead forecast (2026)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+**Other**
+
+Now, I will explore the relationship between wins and payroll, looking deeper at my favorite team, the Padres.
+
+**Wins vs payroll (entire MLB, team-year)**
+
+```{r}
+# Join wins and payroll by Team and Year; one row per team per year
+mlb_wins_payroll <- wins_ts |>
+  inner_join(payroll_ts |> dplyr::select(Year, Team, Payroll), by = c("Year", "Team"))
+# Simple regression: Wins on Payroll
+fit_wins_payroll <- lm(Wins ~ Payroll, data = mlb_wins_payroll)
+summary(fit_wins_payroll)
+```
+
+```{r}
+# Scatter plot: Wins vs Payroll with fitted line
+ggplot(mlb_wins_payroll, aes(x = Payroll, y = Wins)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, colour = "darkblue") +
+  labs(x = "Payroll", y = "Wins", title = "MLB: Wins vs payroll (team-year)") +
+  theme_minimal()
+```
+
+Based on the simple regression, increasing payroll by $1 million increased expected wins by .066 games, and the very small p-value shows this effect is statistically significant. This means that teams like the Dodgers who pay their players $150 million more per year compared to the median team, are expected to have 10 more regular season wins compared to the median team, a significant amount.
+
+```{r}
+# Padres data: join Wins, OPS, ERA, Payroll by Year
+padres_df <- wins_ts |>
+  filter(Team == "Padres") |>
+  dplyr::select(Year, Wins) |>
+  left_join(OPS_ts |> filter(Team == "Padres") |> dplyr::select(Year, OPS), by = "Year") |>
+  left_join(ERA_ts |> filter(Team == "Padres") |> dplyr::select(Year, ERA), by = "Year") |>
+  left_join(payroll_ts |> filter(Team == "Padres") |> dplyr::select(Year, Payroll), by = "Year") |>
+  arrange(Year) |>
+  na.omit()
+
+# ARDL: Wins on own lags and lags of OPS, ERA, Payroll (dynlm)
+padres_ts <- zoo::zoo(padres_df[, c("Wins", "OPS", "ERA", "Payroll")], order.by = padres_df$Year)
+
+ardl_padres <- dynlm(Wins ~ L(Wins, 1:2) + L(OPS, 1:2) + L(ERA, 1:2) + L(Payroll, 1:2), data = padres_ts)
+summary(ardl_padres)
+```
+
+After running an ARDL on Padres wins with past lags of Wins, ERA, OPS, and Payroll, nothing came back as significant.
+
+```{r}
+padres_payroll=dynlm(Wins ~ L(Payroll, 0), data=padres_ts)
+summary(padres_payroll)
+padres_lag_payroll=dynlm(Wins ~ L(Payroll, 0:1), data=padres_ts)
+summary(padres_lag_payroll)
+padres_OPS=dynlm(Wins ~ L(OPS, 1), data=padres_ts)
+summary(padres_OPS)
+padres_ERA=dynlm(Wins ~ L(ERA, 1), data=padres_ts)
+summary(padres_ERA)
+auto.arima(padres_df$Wins)
+```
+
+After regressing Padres wins on current and one lag of payroll, I found that Padres wins are correlated with current payroll (significant on its own, and borderline with a p-value of .053 once last year's payroll is added), but not past payroll. One lag of ERA or OPS cannot be statistically significantly used to predict future Wins.
+
+**Conclusions**
+
+MLB Payrolls are increasing, and this increase leads teams to have a significant advantage over other teams who do not pay. Out of all models, NNETAR was the one with the highest test errors and was much worse compared to ARIMA, ETS, and Prophet who had very similar forecasts and test errors.
+
+There was not much correlation between the Padres performance one year and metrics of their performance in years prior, showing that team changes year by year and does not stay consistent, something that I agree with as a fan of the team.
+
+In terms of future work, I would be interested to see a cointegrated relationship between divisional teams, teams that play each other often and should have a steadier total wins and losses and see how this could affect wins.

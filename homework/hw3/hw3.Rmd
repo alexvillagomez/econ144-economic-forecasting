@@ -1,0 +1,402 @@
+---
+title: "HW3"
+author: "Alex Villagomez"
+date: "2026-02-06"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    code_folding: show
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(fable)
+library(stats)
+require(graphics)
+library(dynlm)
+library(tsibble)
+library(quantmod)
+library(strucchange)
+library(tidyquant)
+```
+
+**Problem 1**
+
+a)
+
+```{r}
+data=read.table(file = "../../data/w-gs1yr-2.txt", header = TRUE)
+head(data)
+
+data_ts = ts(data$rate, start = c(1962, 1), frequency = 52)
+
+par(mfrow = c(2, 1))
+plot(data_ts, main = "Weekly 1-Year Treasury Constant Maturity Rate", xlab = "Time", ylab = "Rate (%)")
+tsdisplay(data_ts)
+```
+
+The ACF starts very high and then decays slowly. The PACF cuts off at lag 2 or 3 which would indicate that this is an AR(2) or AR(3).
+b)
+
+```{r}
+ar2=arima(data_ts, order = c(2, 0, 0))
+ar4=arima(data_ts, order = c(4, 0, 0))
+ar3=arima(data_ts, order = c(3, 0, 0))
+summary(ar2)
+summary(ar3)
+summary(ar4)
+AIC(ar2, ar3, ar4)
+BIC(ar2, ar3, ar4)
+```
+
+After comparing the AIC and BIC, the AR(4) has the lowest AIC while the AR(3) has the lowest BIC. I prefer the AR(3) because BIC penalizes extra parameters more heavily and the improvement in AIC from adding a fourth lag is small.
+
+c)
+
+```{r}
+res=residuals(ar3)
+tsdisplay(res)
+```
+
+The residuals seem to be stationary, however, the ACF and PACF both have several significant lags. This indicates that there are dynamics in play that are not captured by the model.
+
+d) 
+
+```{r}
+y=recresid(ar3$res~1)
+tsdisplay(y)
+```
+
+There are many spikes in the ACF and PACF and they also show signs of some sort of cycles as they seem to oscillate. This indicates further dynamics that need to be picked up.
+
+e)
+
+```{r}
+plot(efp(ar3$res~1, type = "Rec-CUSUM"))
+```
+
+The Cumulative Sum stays within the lines which means that there is not a structural breakdown evident.
+
+f)
+
+```{r}
+rmodel=auto.arima(data_ts)
+summary(rmodel)
+```
+
+After running auto.arima, it chose an arima(1,1,2) which means that there is an AR(1), MA(2), and the data was differenced once. My model was an AR(3), and did not perform as well as the auto.arima function according to AIC and BIC, although these criteria are not strictly comparable between a model in levels and a model in first differences.
+
+g)
+
+```{r}
+plot(forecast(ar3,h=24),shadecols="oldstyle")
+plot(forecast(rmodel,h=24),shadecols="oldstyle")
+```
+
+The forecast of the ar(3) shows a more positive upward trend compared to the arima(1,1,2). Besides that, both are quite similar except for more movement in the ar3.
+
+**Problem 2**
+
+```{r}
+CPI_data=read_excel("../../data/Chapter7_Exercises_Data.xls", sheet="Exercise 8")
+CPI_data_ts=ts(CPI_data[2], start = c(1957, 1), frequency = 1)
+CPI_nofoodenergy_ts=ts(CPI_data[4], start = c(1957, 1), frequency = 1)
+
+tsdisplay(CPI_data_ts)
+tsdisplay(CPI_nofoodenergy_ts)
+
+cpi_model=auto.arima(CPI_data_ts)
+cpi_nofoodenergy_model=auto.arima(CPI_nofoodenergy_ts)
+summary(cpi_model)
+summary(cpi_nofoodenergy_model)
+```
+
+It looks as if all CPI is more difficult to predict because there are slightly more dynamics in the ACF and PACF compared to the CPI without food and energy. The summary statistics such as RMSE agree with this as RMSE is lower for the CPI without food and energy.
+
+```{r}
+plot(forecast(cpi_model,h=1),shadecols="oldstyle")
+plot(forecast(cpi_nofoodenergy_model,h=1),shadecols="oldstyle")
+
+plot(forecast(cpi_model,h=2),shadecols="oldstyle")
+plot(forecast(cpi_nofoodenergy_model,h=2),shadecols="oldstyle")
+```
+
+We can see that the variance of the forecasts is lower for the CPI without food and energy. This agrees with the earlier assumption that the CPI without food and energy is easier to predict.
+
+**Problem 3**
+
+```{r}
+set.seed(144)
+# Strong persistence AR(3)
+ar3_strong <- arima.sim(model = list(ar = c(0.6, 0.25, 0.13)), n = 1000)
+tsdisplay(ar3_strong)
+
+# Weak persistence AR(3)
+ar3_weak <- arima.sim(model = list(ar = c(0.2, -0.05, 0.05)), n = 1000)
+tsdisplay(ar3_weak)
+```
+
+For the high persistence I chose an AR with parameters .6, .25, and .13 which add up to .98. Since this is very close to 1, it has very strong persistence which can be seen by the data taking a while to mean revert. For the weak persistence, the parameters add up to .2 which means that it is much less persistent and the data mean reverts much faster. It also has a PACF and ACF that are far less "clean" compared to the high persistence.
+
+**Problem 4**
+
+```{r}
+# Daily (includes adjusted close)
+daily_google <- tq_get("GOOG", from = "2015-01-01", to = "2025-01-01", get = "stock.prices")
+head(daily_google)
+
+# Monthly: get daily then take last observation per month
+monthly_google <- daily_google %>%
+  dplyr::mutate(month = lubridate::floor_date(date, "month")) %>%
+  dplyr::group_by(month) %>%
+  dplyr::slice_tail(n = 1) %>%
+  dplyr::ungroup()
+head(monthly_google)
+
+ret_daily=diff(log(daily_google$adjusted))*100
+ret_monthly=diff(log(monthly_google$adjusted))*100
+
+fit_daily=auto.arima(ret_daily)
+fit_monthly=auto.arima(ret_monthly)
+summary(fit_daily)
+summary(fit_monthly)
+tsdisplay(residuals(fit_daily))
+tsdisplay(residuals(fit_monthly))
+par(mfrow=c(2,1))
+plot(forecast(fit_daily,h=12),shadecols="oldstyle")
+plot(forecast(fit_monthly,h=12),shadecols="oldstyle")
+```
+
+The forecasts stay close to the mean, however, the density of the forecasts shows that they are extremely volatile.
+
+**Problem 5**
+
+```{r}
+data=read_excel("../../data/Chapter8_Exercises_Data.xlsx", sheet="Exercise 10")
+data_ts=ts(data[4], start = c((1967), 1), frequency = 12)
+head(data_ts)
+tsdisplay(data_ts)
+
+fit_data=auto.arima(data_ts)
+summary(fit_data)
+
+summary(forecast(fit_data,h=12))
+plot(forecast(fit_data,h=12),shadecols="oldstyle")
+```
+
+From auto.arima, the best model has an ARMA(1,2) with a seasonal MA(2) and one seasonal difference, with a frequency of 12. This indicates the presence of seasonal dynamics in the data. The forecast shows this seasonal component.
+
+**Problem 6**
+
+```{r}
+set.seed(144)
+y <- numeric(100)
+e <- rnorm(100)
+for(i in 2:100)
+  y[i] <- 0.95*y[i-1] + e[i]
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+
+autoplot(sim)
+tsdisplay(sim)
+```
+
+b) As you increase phi, the data becomes more persistent.
+
+```{r}
+e <- rnorm(100) # White noise shocks
+y_ma <- numeric(100)
+
+for(i in 2:100) {
+  y_ma[i] <- e[i] + 0.999 * e[i-1] # Note: current error + weighted past error
+}
+
+sim_ma <- tsibble(idx = seq_len(100), y = y_ma, index = idx)
+
+# Part d: Plot
+autoplot(sim_ma)
+tsdisplay(sim_ma)
+```
+
+As you increase the value of theta, the data becomes slightly smoother and more persistent.
+
+```{r}
+y_arma <- numeric(100)
+e <- rnorm(100)
+
+for(i in 2:100) {
+  y_arma[i] <- 0.6 * y_arma[i-1] + e[i] + 0.6 * e[i-1]
+}
+
+sim_arma <- tsibble(idx = seq_len(100), y = y_arma, index = idx)
+
+autoplot(sim_arma)
+tsdisplay(sim_arma)
+```
+
+```{r}
+y_ar2 <- numeric(100)
+e <- rnorm(100)
+
+for(i in 3:100) {
+  y_ar2[i] <- (-0.8 * y_ar2[i-1]) + (0.3 * y_ar2[i-2]) + e[i]
+}
+
+sim_ar2 <- tsibble(idx = seq_len(100), y = y_ar2, index = idx)
+
+autoplot(sim_ar2)
+tsdisplay(sim_ar2)
+```
+
+The ARMA(1,1) does not look to have clear pattern just from looking at it and has confusing mix of persistence and mean reversion. The AR(2) is divergent because one root of its characteristic polynomial lies inside the unit circle (phi2 - phi1 = 1.1 > 1), so the process is not stationary.
+
+**Problem 7**
+
+```{r}
+fit=auto.arima(aus_airpassengers)
+head(aus_airpassengers)
+summary(fit)
+tsdisplay(residuals(fit))
+plot(forecast(fit,h=10),shadecols="oldstyle")
+```
+
+Auto Arima chose an ARIMA(0,2,1) which is an MA1 that has been differenced twice.
+
+b) 
+
+(1-B)^2 y_t = (1-.8963B)e_t (there is no constant because the series is differenced twice).
+
+c,d,e)
+```{r}
+arma010<-arima(aus_airpassengers$Passengers, order = c(0, 1, 0))
+arma212 <- Arima(aus_airpassengers$Passengers, order = c(2, 1, 2), include.drift = TRUE)
+arma021<-arima(aus_airpassengers$Passengers, order = c(0, 2, 1))
+par(mfrow=c(3,1))
+plot(forecast(arma010,h=10),shadecols="oldstyle")
+plot(forecast(arma212,h=10),shadecols="oldstyle")
+plot(forecast(arma021,h=10),shadecols="oldstyle")
+
+```
+
+The arima(0,1,0) has no drift, so its forecast is flat compared to the model in part a. If you try to include a constant in the arma021, there is an error because the model is not stationary. In part d, if you remove the constant there is an error and the model is not able to compute.
+
+**Problem 8**
+
+```{r}
+employment_subset <- us_employment %>%
+  filter(Title == "Retail Trade")
+
+employment_subset %>%
+  model(STL(Employed)) %>%
+  components() %>%
+  autoplot()
+```
+
+The trend is upward and positive and the seasonal component is very strong but highly volatile.
+
+b)
+
+```{r}
+retail_log <- us_employment %>%
+  filter(Title == "Retail Trade")
+
+retail_log %>%
+  model(STL(log(Employed))) %>%
+  components() %>%
+  autoplot()
+```
+
+I applied a log transformation to the data.
+
+c) 
+
+No, the data is not stationary.
+
+```{r}
+Employed <- employment_subset$Employed
+Employed_ts <- ts(Employed, start = c(1939, 1), frequency = 12)
+
+autoplot(diff(Employed_ts, 12))
+```
+
+The data is now stationary.
+
+```{r}
+fit=auto.arima(difference(Employed, 12) %>% difference())
+summary(fit)
+tsdisplay(residuals(fit))
+plot(forecast(fit,h=10),shadecols="oldstyle")
+```
+
+After taking a seasonal difference and a first difference, the auto.arima function chose an ARIMA(1,0,2) with zero mean, which is the best model according to AICc.
+
+e)
+
+```{r}
+residuals(fit) %>% tsdisplay()
+ljung_box(residuals(fit), lag = 12, type = "Ljung-Box")
+```
+
+No, the residuals are not white noise. We can test using the Ljung-Box test. The p-value is approximately 0, so we reject the null hypothesis that the residuals are white noise.
+
+f)
+
+```{r}
+plot(forecast(fit,h=3),shadecols="oldstyle")
+```
+
+The forecast agrees with the data from the FRED.
+
+g) 
+
+After trying different years ahead, I would say staying under 10 years ahead would be ideal.
+
+**Problem 9**
+
+a)
+
+```{r}
+data <- global_economy %>%
+  filter(Country == "Switzerland")
+data_ts=ts(data$Population, start= c(1960, 1), frequency = 1, end=c(2017,1))
+plot(data_ts)
+```
+
+b)
+
+This is an arima(3,1,0) 
+
+c)
+
+```{r}
+tsdisplay(difference(data_ts, 1))
+```
+
+There is a decay in the ACF and the PACF cuts off at lag 3, indicating an AR(3).
+
+d)
+
+2018=8.5591 million people
+
+2019=8.6495 million people
+
+2020=8.7360 million people
+
+e)
+
+```{r}
+arma310<-arima(data_ts, order = c(3, 1, 0))
+forecast(arma310,h=3)
+summary(arma310)
+```
+
+These values are slightly different because R found different parameters for the AR1, 2, and 3 components which would change the calculations.

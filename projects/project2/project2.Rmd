@@ -1,0 +1,244 @@
+---
+title: "Project 2"
+author: "Alex Villagomez"
+date: "2026-02-20"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    code_folding: show
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(fable)
+library(stats)
+require(graphics)
+library(dynlm)
+library(tsibble)
+library(vars)
+library(strucchange)
+library(forecastHybrid)
+```
+
+**Introduction**
+
+This project analyzes the time series data of lookups for "flu symptoms" and "flu" on Google Trends from January 2004 through February 2026. Google trends provides data indexed between 0 and 100. There is a clear seasonal pattern in the data that peaks in the winter months, also known as "flu season" and there are large spikes in 2009 and 2020 likely due to the H1N1 outbreak and COVID-19 pandemic.
+
+**(a)**
+```{r}
+data=read_csv("../../data/time_series_US_20031231-1600_20260219-1712.csv")
+flu_ts=ts(data[,3], start=c(2004,1), frequency=12)
+flu_symptoms_ts=ts(data[,2], start=c(2004,1), frequency=12)
+
+tsdisplay(flu_symptoms_ts)
+tsdisplay(flu_ts)
+```
+
+The time-series plots for both “flu” and “flu symptoms” show clear annual spikes, consistent with seasonal flu cycles. The magnitude of these spikes varies across years, with especially large increases during major outbreak periods.
+
+The ACF for both series displays strong persistence and visible seasonal autocorrelation around lag 12, confirming annual seasonality. The slow decay of the ACF indicates substantial serial correlation.
+
+The PACF shows significant early lags, suggesting autoregressive dynamics. These patterns indicate that the data contain trend, strong seasonal components, and cyclical persistence.
+
+**(b)**
+```{r}
+plot(stl(flu_symptoms_ts[,1], s.window="periodic"))
+plot(stl(flu_ts[,1], s.window="periodic"))
+```
+
+The STL component shows a strong seasonal component, and a trend component that slightly increases over time. There are definitely dynamics left in the residuals that are not captured by trend or seasonality.
+
+**(c)**
+```{r}
+ets_model_flu_symptoms=ets(flu_symptoms_ts[,1])
+ets_model_flu=ets(flu_ts[,1])
+summary(ets_model_flu_symptoms)
+summary(ets_model_flu)
+```
+
+Exponential smoothing (ETS) and ARIMA models were estimated.
+
+For “flu symptoms,” the selected ETS model is ETS(A,N,N), which assumes additive errors and no explicit trend or seasonal structure. The smoothing parameter is close to one, indicating heavy reliance on recent observations.
+
+For “flu,” the selected model is ETS(M,N,M), allowing multiplicative seasonality, which is consistent with visible seasonal amplitude variation.
+
+
+**(e/f)**
+```{r}
+flu_symptoms_residuals=residuals(ets_model_flu_symptoms)
+flu_residuals=residuals(ets_model_flu)
+tsdisplay(flu_symptoms_residuals)
+tsdisplay(flu_residuals)
+```
+
+Residuals for both series fluctuate around zero but display extreme outliers during outbreak periods. These spikes indicate that extreme epidemic shocks are difficult to capture using standard smoothing methods.
+
+For flu symptoms, residual autocorrelation remains at several lags, suggesting incomplete removal of serial dependence.
+
+For flu, residual autocorrelation is smaller but still present.
+
+This indicates that while the models capture broad seasonal structure, additional dynamic components improve performance.
+
+**g**
+```{r}
+flu_symptoms_recresid=recresid(ets_model_flu_symptoms$res~1)
+plot(flu_symptoms_recresid, pch=16,ylab="Recursive Residuals")
+plot(efp(ets_model_flu_symptoms$res~1, type = "Rec-CUSUM"), main="Flu Symptoms Recursive Residuals")
+
+flu_recresid=recresid(ets_model_flu$res~1)
+plot(flu_recresid, pch=16,ylab="Recursive Residuals")
+plot(efp(ets_model_flu$res~1, type = "Rec-CUSUM"), main="Flu Recursive Residuals")
+```
+
+Despite an increase in recursive residuals around 2009, the time of the H1N1 outbreak, the residuals are still within the critical bounds indicating that there is not a significant structural break in the data.
+
+**(h)**
+```{r}
+summary(ets_model_flu_symptoms)
+summary(ets_model_flu)
+```
+
+For flu symptoms, the selected model is ETS(A,N,N), which includes additive errors but no explicit trend or seasonal component. The smoothing parameter alpha is approximately 1, indicating that the model places very high weight on recent observations. Residual autocorrelation remains present, suggesting that some dynamics are not fully captured.
+
+For flu, the selected model is ETS(M,N,M), which incorporates multiplicative seasonality. The level smoothing parameter alpha equals 0.9925, showing strong responsiveness to recent shocks, while the seasonal smoothing parameter gamma equals 0.0052, indicating stable seasonal patterns over time. Residual autocorrelation is relatively small but not entirely eliminated.
+
+Overall, the ETS models capture level and seasonal structure but leave some cyclical persistence unmodeled.
+
+**(i)**
+```{r}
+ets_forecast_flu_symptoms=forecast(ets_model_flu_symptoms, h=12)
+ets_forecast_flu=forecast(ets_model_flu, h=12)
+plot(ets_forecast_flu_symptoms, main = "12-Step-Ahead Forecast with 80% and 95% Prediction Intervals",
+     shadecols = "oldstyle")
+plot(ets_forecast_flu, main = "12-Step-Ahead Forecast with 80% and 95% Prediction Intervals",
+     shadecols = "oldstyle")
+```
+
+
+
+```{r}
+train_data_flu=subset(flu_ts, end=length(flu_ts)-12)
+test_data_flu=subset(flu_ts, start=length(flu_ts)-11)
+flu_ets=ets(train_data_flu)
+flu_arima=auto.arima(train_data_flu)
+
+fc_flu_ets=forecast(flu_ets, h=12)
+fc_flu_arima=forecast(flu_arima, h=12)
+
+accuracy(fc_flu_ets, test_data_flu)
+accuracy(fc_flu_arima, test_data_flu)
+```
+
+```{r}
+train_data_flu_symptoms=subset(flu_symptoms_ts, end=length(flu_symptoms_ts)-12)
+test_data_flu_symptoms=subset(flu_symptoms_ts, start=length(flu_symptoms_ts)-11)
+flu_symptoms_ets=ets(train_data_flu_symptoms)
+flu_symptoms_arima=auto.arima(train_data_flu_symptoms)
+
+fc_flu_symptoms_ets=forecast(flu_symptoms_ets, h=12)
+fc_flu_symptoms_arima=forecast(flu_symptoms_arima, h=12)
+
+accuracy(fc_flu_symptoms_ets, test_data_flu_symptoms)
+accuracy(fc_flu_symptoms_arima, test_data_flu_symptoms)
+```
+
+```{r}
+flu_symptoms_model_arima=auto.arima(flu_symptoms_ts[,1])
+flu_model_arima=auto.arima(flu_ts)
+summary(flu_symptoms_model_arima)
+summary(flu_model_arima)
+```
+
+```{r}
+flu_symptoms_forecast_arima=forecast(flu_symptoms_model_arima, h=12)
+flu_forecast_arima=forecast(flu_model_arima, h=12)
+plot(flu_symptoms_forecast_arima, main = "12-Step-Ahead Forecast with 80% and 95% Prediction Intervals", shadecols = "oldstyle")
+plot(flu_forecast_arima, main = "12-Step-Ahead Forecast with 80% and 95% Prediction Intervals", shadecols = "oldstyle")
+```
+
+**(j)**
+```{r}
+accuracy(fc_flu_arima, test_data_flu)
+accuracy(fc_flu_symptoms_arima, test_data_flu_symptoms)
+```
+
+In terms of MAPE, the arima model significantly outperforms the ETS model for both flu and flu symptoms when looking at the test data. The train data for both models perform similarly.
+
+**(k)**
+```{r}
+fc_hybrid <- hybridModel(train_data_flu, models = "ae", weights = "insample.errors", errorMethod = "RMSE")
+fc_combined <- forecast(fc_hybrid, h = 12)
+plot(fc_combined)
+accuracy(fc_combined, test_data_flu)
+accuracy(fc_flu_ets, test_data_flu)
+accuracy(fc_flu_arima, test_data_flu)
+
+```
+
+```{r}
+fc_hybrid_symptoms <- hybridModel(train_data_flu_symptoms, models = "ae", weights = "insample.errors", errorMethod = "RMSE")
+fc_combined_symptoms <- forecast(fc_hybrid_symptoms, h = 12)
+plot(fc_combined_symptoms)
+accuracy(fc_combined_symptoms, test_data_flu_symptoms)
+accuracy(fc_flu_symptoms_ets, test_data_flu_symptoms)
+accuracy(fc_flu_symptoms_arima, test_data_flu_symptoms)
+```
+
+The MAPE of the hybrid model does better than the ETS model, however, it fails to outperform auto.arima for both flu and flu symptoms.
+
+**(l)**
+```{r}
+y=ts.union(flu_ts, flu_symptoms_ts)
+
+adf.test(flu_ts)
+adf.test(flu_symptoms_ts)
+VARselect(y, lag.max = 10, type = "both")
+ccf(flu_ts[,1], flu_symptoms_ts[,1])
+var_model=VAR(y, p=2)
+summary(var_model)
+```
+
+Augmented Dickey Fuller tests reject the null hypothesis of a unit root for both series, indicating that the variables are stationary in levels. Based on the Schwarz criterion (SC), a VAR with two lags was selected; AIC and FPE prefer seven lags and HQ prefers three, so I chose the most parsimonious specification. The estimated model is stable, as all roots lie inside the unit circle.
+
+In the flu equation, lagged flu and lagged flu symptoms are statistically significant, indicating both persistence and cross variable effects. In the flu symptoms equation, only its own lags are statistically significant, while lagged flu is not. This suggests that flu symptoms help predict flu, but flu does not meaningfully predict flu symptoms.
+
+**(m)**
+```{r}
+irf(var_model)
+plot(irf(var_model, n.ahead = 12, impulse = "flu_ts"))
+plot(irf(var_model, n.ahead = 12, impulse = "flu_symptoms_ts"))
+```
+
+Impulse response analysis shows that a positive shock to flu symptoms leads to an increase in flu searches that peaks after one month and persists for about three months before gradually declining. A shock to flu also raises flu symptoms searches for about three months, but most of that response is immediate, which partly reflects flu being ordered first in the orthogonalized impulse responses. Combined with the Granger causality tests below, this points to asymmetric dynamics between the two variables.
+
+**(n)**
+```{r}
+grangertest(flu_symptoms_ts[,1] ~ flu_ts[,1], order = 2)
+grangertest(flu_ts[,1] ~ flu_symptoms_ts[,1], order = 2)
+```
+
+Granger causality tests confirm this pattern. Flu symptoms Granger cause flu at conventional significance levels, while flu does not Granger cause flu symptoms. This suggests that symptom related searches contain predictive information about broader flu searches.
+
+**(o)**
+```{r}
+var.predict = predict(object=var_model, n.ahead=12)
+plot(var.predict, shadecols = "oldstyle")
+```
+
+The VAR model generates twelve step ahead forecasts that incorporate the dynamic interaction between the two series. Compared to univariate forecasts, the VAR accounts for cross variable spillovers and produces forecast intervals that reflect joint uncertainty. Overall, the results highlight the importance of modeling the two search terms jointly.
+
+**Conclusion and Future Work**
+
+This analysis shows that Google Trends data for flu and flu symptoms exhibit strong seasonality, persistence, and outbreak driven fluctuations. ARIMA models outperform exponential smoothing in forecasting accuracy, and the VAR framework reveals that searches for flu symptoms contain predictive information for broader flu searches. This suggests that symptom related search activity may serve as an early indicator of flu related interest.
+
+Future work could extend this analysis by incorporating additional health related search terms or official flu case data to evaluate whether search intensity predicts actual infection rates. 

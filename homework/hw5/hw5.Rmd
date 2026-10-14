@@ -1,0 +1,383 @@
+---
+title: "HW5"
+author: "Alex Villagomez"
+date: "2026-03-06"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    code_folding: show
+
+---
+
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(fable)
+library(stats)
+require(graphics)
+library(dynlm)
+library(urca)
+library(zoo)
+library(xts)
+library(rugarch)
+library(quantmod)
+```
+
+**Problem 1**
+
+a)
+```{r}
+data(aus_accommodation)
+aus_accommodation <- aus_accommodation %>%
+  mutate(cpi_adj_takings = Takings / CPI * 100)
+head(aus_accommodation)
+unique(aus_accommodation$State)
+
+nsw <- aus_accommodation %>% filter(State == "New South Wales")
+plot(nsw$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: New South Wales", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+act <- aus_accommodation %>% filter(State == "Australian Capital Territory")
+plot(act$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: Australian Capital Territory", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+nt <- aus_accommodation %>% filter(State == "Northern Territory")
+plot(nt$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: Northern Territory", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+qld <- aus_accommodation %>% filter(State == "Queensland")
+plot(qld$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: Queensland", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+sa <- aus_accommodation %>% filter(State == "South Australia")
+plot(sa$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: South Australia", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+tas <- aus_accommodation %>% filter(State == "Tasmania")
+plot(tas$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: Tasmania", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+vic <- aus_accommodation %>% filter(State == "Victoria")
+plot(vic$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: Victoria", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+wa <- aus_accommodation %>% filter(State == "Western Australia")
+plot(wa$cpi_adj_takings, type = "l", main = "CPI-adjusted takings: Western Australia", xlab = "Quarter", ylab = "CPI-adjusted takings")
+
+```
+
+b)
+
+```{r}
+idx_nm <- index_var(aus_accommodation)
+fit_models <- aus_accommodation %>%
+  group_by(State) %>%
+  mutate(
+    t = row_number(),
+    knot_idx = match(yearquarter("2008 Q1"), .data[[idx_nm]]),
+    post2008 = pmax(0, t - replace(knot_idx, is.na(knot_idx), 1L))
+  ) %>%
+  model(
+    dyn_reg = ARIMA(cpi_adj_takings ~ t + post2008 + season())
+  )
+fit_models
+```
+
+c)
+
+```{r}
+# Residuals from each state's model
+resid_df <- fit_models %>% augment()
+# Residuals over time by state
+resid_df %>%
+  ggplot(aes(x = !!sym(idx_nm), y = .resid)) +
+  geom_line() +
+  facet_wrap(~ State, scales = "free_y", ncol = 2) +
+  labs(x = "Quarter", y = "Residual", title = "Residuals by state")
+# ACF of residuals by state (gg_tsresiduals() only accepts one model at a time)
+resid_df %>%
+  ACF(.innov) %>%
+  autoplot() +
+  labs(title = "ACF of innovation residuals by state")
+```
+
+d)
+
+```{r}
+h <- 6
+
+# 1. Forecast CPI with ETS (6 steps)
+cpi_series <- aus_accommodation %>%
+  filter(State == "New South Wales") %>%
+  select(!!sym(idx_nm), CPI)
+cpi_fc <- cpi_series %>% model(ETS(CPI)) %>% forecast(h = h) %>% as_tibble()
+cpi_fc <- cpi_fc %>% select(Quarter = !!sym(idx_nm), CPI = .mean)
+
+# 2. Forecast CPI-adjusted takings (6 steps) — ETS on adjusted series, no regressors
+cpi_adj_fit <- aus_accommodation %>% group_by(State) %>% model(ETS(cpi_adj_takings))
+cpi_adj_fc <- cpi_adj_fit %>% forecast(h = h)
+
+# 3. Takings forecast = (CPI-adjusted * CPI) / 100
+takings_fc <- cpi_adj_fc %>%
+  as_tibble() %>%
+  select(State, Quarter = !!sym(idx_nm), cpi_adj_takings = .mean) %>%
+  left_join(cpi_fc, by = "Quarter") %>%
+  mutate(Takings_forecast = (cpi_adj_takings * CPI) / 100)
+takings_fc
+```
+
+e)
+
+Some uncertainty that has not been taken into account is the CPI forecast uncertainty and the uncertainty of the adjusted takings model. Both of these uncertainties combine into the uncertainty of the takings model.
+
+**Problem 2**
+
+Harmonic regression (us_gasoline): piecewise linear trend + Fourier terms; select by AICc.
+
+```{r}
+head(us_gasoline)
+
+gas <- us_gasoline |>
+  mutate(t = row_number())
+
+knot_vals <- seq(150, nrow(gas) - 150, by = 52)
+
+results <- crossing(knot = knot_vals, K = 1:4) |>
+  mutate(
+    fit = map2(knot, K, \(k, j) {
+      gas |>
+        mutate(knot_term = pmax(0, t - k)) |>
+        model(
+          TSLM(Barrels ~ t + knot_term + fourier(period = 52, K = j))
+        )
+    }),
+    info = map(fit, glance)
+  ) |>
+  unnest(info) |>
+  arrange(AICc)
+
+results |>
+  select(knot, K, AICc) |>
+  slice_head(n = 10)
+```
+ 
+The best model is a knot at week 774 and K=4.
+
+b)
+
+```{r}
+best_knot <- 774
+best_K <- 4
+final_fit <- gas |>
+  mutate(knot_term = pmax(0, t - best_knot)) |>
+  model(
+    ARIMA(
+      Barrels ~ t + knot_term + fourier(period = 52, K = best_K) + PDQ(0,0,0),
+      stepwise = TRUE,
+      approximation = TRUE
+    )
+  )
+
+glance(final_fit)
+```
+
+c)
+
+```{r}
+final_fit |> gg_tsresiduals()
+
+augment(final_fit) |>
+  features(.innov, ljung_box, lag = 52, dof = 10)
+res <- augment(final_fit)$.resid
+Box.test(res, type = "Ljung-Box", lag = 24)
+```
+
+d)
+
+```{r}
+final_fit |> gg_tsresiduals()
+
+augment(final_fit) |>
+  features(.innov, ljung_box, lag = 52, dof = 2 * best_K + 2)
+```
+
+e)
+
+```{r}
+# Build future 52 weeks with t and knot_term
+n <- nrow(gas)
+new_data <- gas |>
+  new_data(n = 52) |>
+  mutate(t = n + row_number(), knot_term = pmax(0, t - best_knot))
+
+fc <- final_fit |> forecast(new_data = new_data)
+fc |> autoplot(gas)
+```
+
+**Problem 3**
+
+a)
+
+This model is an Arima Model with an p=0, d=1, q=1, P=2, D=1, Q=0 where the seasonal frequency is 12.
+
+b)
+
+Since y* is the log of electricity used and x1* and x2* are the square roots of heating and cooling degrees, the coefficients are semi-elasticities.
+
+B1 shows that as the square root of heating degrees increases by one, electricity used increases by about .77% per month on average.
+
+B2 shows that as the square root of cooling degrees increases by one, electricity used increases by about 2.08% per month on average.
+
+c) 
+
+Plug in yt* - 0.0077x1* - 0.0208x2* for the error term in the ARIMA.
+(1+0.5373B12+0.4667B24)(1-B)(1-B12)(yt*-0.0077x1*-0.0208x2*)=(1-0.5830B)et
+
+d) 
+
+First forecast the yt* using the beta values. Then, append the arima model as the error term onto this forecast to forecast the full model.
+
+e)
+
+ARIMA is needed because the data is not independent of time and therefore that needs to be accounted for in the model somewhere, arima can do this. Since the data is not independent of time, the statistical tests are not valid if the errors are treated as white noise, but by accounting for the autocorrelation using arima, you can make more valid tests. Modeling the error term (eta_t) as an ARIMA allows for time variation in the data, which is more accurate to the true data generating process and will enhance the forecast.
+
+**Problem 4**
+
+```{r}
+head(aus_retail)
+retail <- aus_retail |> filter(`Series ID` == "A3349849A")
+lambda <- retail %>%
+  pull(Turnover) %>%
+  forecast::BoxCox.lambda()
+
+fit <- model(retail,
+  `K = 1` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 1) + PDQ(0,0,0)),
+  `K = 2` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 2) + PDQ(0,0,0)),
+  `K = 3` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 3) + PDQ(0,0,0)),
+  `K = 4` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 4) + PDQ(0,0,0)),
+  `K = 5` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 5) + PDQ(0,0,0)),
+  `K = 6` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 6) + PDQ(0,0,0)),
+  `K = 7` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 7) + PDQ(0,0,0)),
+  `K = 8` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 8) + PDQ(0,0,0)),
+  `K = 9` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 9) + PDQ(0,0,0)),
+  `K = 10` = ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 10) + PDQ(0,0,0))
+)
+
+glance(fit) |> arrange(AICc)
+
+final_fit <- model(retail,
+  ARIMA(box_cox(Turnover, lambda) ~ fourier(K = 6) + PDQ(0,0,0))
+)
+```
+
+Best K is = 6.
+
+b)
+
+```{r}
+final_fit |> gg_tsresiduals()
+
+augment(final_fit) |>
+  features(.innov, ljung_box, lag = 24, dof = 8)
+```
+
+The residual plots look close to white noise, but the Ljung-Box test has a p-value of .006, so we reject the null hypothesis that the residuals are white noise.
+
+c)
+
+```{r}
+forecast(final_fit, h = 52) |> autoplot(retail)
+```
+
+It looks similar to forecasts from previous models, however, it does look stronger and captures the seasonal component better while also using less parameters.
+
+**Problem 5**
+
+```{r}
+head(pedestrian)
+
+ped <- pedestrian |>
+  filter(Sensor == "Birrarung Marr") |>
+  select(Date_Time, Count) |>
+  as_tsibble(index = Date_Time) |>
+  fill_gaps() |>
+  mutate(Count = if_else(is.na(Count), 0, Count))
+
+# STL decomposition model
+fit_stl <- ped |>
+  model(
+    STL_ETS = decomposition_model(
+      STL(Count ~ season(window = "periodic")),
+      ETS(season_adjust ~ season("N"))
+    )
+  )
+
+fit_dhr <- ped |>
+  model(
+    `K = 1` = ARIMA(Count ~ fourier(K = 1) + PDQ(0,0,0)),
+    `K = 2` = ARIMA(Count ~ fourier(K = 2) + PDQ(0,0,0)),
+    `K = 3` = ARIMA(Count ~ fourier(K = 3) + PDQ(0,0,0)),
+    `K = 4` = ARIMA(Count ~ fourier(K = 4) + PDQ(0,0,0)),
+    `K = 5` = ARIMA(Count ~ fourier(K = 5) + PDQ(0,0,0)),
+    `K = 6` = ARIMA(Count ~ fourier(K = 6) + PDQ(0,0,0))
+  )
+
+glance(fit_dhr) |> arrange(AICc)
+```
+
+Best K is = 6.
+
+```{r}
+best_K_ped <- 6
+final_dhr <- model(ped,
+  ARIMA(Count ~ fourier(K = 6) + PDQ(0,0,0))
+)
+fit_stl |> gg_tsresiduals()
+final_dhr |> gg_tsresiduals()
+
+augment(fit_stl) |>
+  features(.innov, ljung_box, lag = 24)
+
+augment(final_dhr) |>
+  features(.innov, ljung_box, lag = 24, dof = 2 * best_K_ped)
+```
+
+The two residuals look very similar on the ACF. The Ljung-Box tests have p-values of approximately 0 for both, which shows that neither model captures all of the available information in the data.
+
+c)
+
+The forecast is best from the STL model because its residuals are closer to white noise than the DHR model residuals (a Ljung-Box statistic of 1097 compared to 1432). However, both still have a lot of room for improvement.
+
+
+**Problem 6**
+
+Redundant of earlier problem, Dr. Rojas said we could skip.
+
+
+**Problem 7**
+
+```{r}
+set.seed(144)
+fit_retail <- retail |>
+  model(
+    NNETAR = NNETAR(Turnover)
+  )
+
+gg_tsresiduals(fit_retail)
+
+# us_gasoline
+fit_gas <- us_gasoline |>
+  model(
+    ARIMA = ARIMA(Barrels),
+    ETS = ETS(Barrels),
+    NNETAR = NNETAR(Barrels)
+  )
+
+fc_gas <- fit_gas |> forecast(h = 12)
+
+accuracy(fit_gas) |> arrange(RMSE)
+fc_gas |> autoplot(us_gasoline)
+```

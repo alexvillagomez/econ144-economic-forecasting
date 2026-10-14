@@ -1,0 +1,275 @@
+---
+title: "HW4"
+author: "Alex Villagomez"
+date: "2026-03-01"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    code_folding: show
+
+---
+
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(fable)
+library(stats)
+require(graphics)
+library(dynlm)
+library(urca)
+library(zoo)
+library(xts)
+library(rugarch)
+library(quantmod)
+```
+
+**Problem 1**
+
+```{r}
+data=read_excel("../../data/Chapter12_exercises_data.xls", sheet="Exercise 1-2")
+y=as.numeric(data$GDP, na.omit=TRUE)
+c=as.numeric(data$CONSUMPTION, na.omit=TRUE)
+y=ts(y, start=c(1947,1), end=c(2012,4), freq=4)
+c=ts(c, start=c(1947,1), end=c(2012,4), freq=4)
+ly=log(y)
+lc=log(c)
+
+plot(ly, type="l", col="blue", ylab="Log GDP", xlab="Time", ylim=c(7, 10))
+lines(lc, col="red")
+adf.test(ly)
+adf.test(lc)
+
+adf.test(diff(ly))
+adf.test(diff(lc))
+```
+
+The two time series are non-stationary which is a good requirement for cointegration. They are also economically correlated and share similar dynamics in the plot. Their differences are stationary, which is a good requirement for cointegration. 
+
+```{r}
+comodel=lm(lc~ly)
+summary(comodel)
+
+resid=residuals(comodel)
+adf.test(resid)
+```
+
+After running the model, we can see that the R^2 is very high which is good for cointegration. However, the residuals are not stationary because the p-value (.051) is above 5%. Therefore, this is not a cointegrated relationship at the 5% level, although the result is borderline.
+
+**Problem 2**
+
+```{r}
+ci=cbind(ly,lc)
+jt=ca.jo(ci)
+summary(jt)
+
+tw=ly-.934*lc
+adf.test(tw)
+
+plot(tw)
+```
+
+The Johansen maximal eigenvalue test rejects r = 0 at the 5% level (17.77 > 14.90) but not at the 1% level, and does not reject r <= 1, which points to one cointegrating relationship. However, the adf test on the combination given by the first eigenvector (ly - .934lc) has a p-value of .055, so it is not stationary at the 5% level. Together with Problem 1, the evidence for a cointegrating relationship between GDP and consumption is borderline.
+
+**Problem 3**
+
+
+```{r}
+data=read_excel("../../data/Chapter12_exercises_data.xls", sheet="Exercise 3")
+cpigermany=ts(data$CPI_Germany, start=c(1999,1), end=c(2013,1), freq=12)
+cpius=ts(data$CPI_US, start=c(1999,1), end=c(2013,1), freq=12)
+ex=ts(data$EX_dollar_euro, start=c(1999,1), end=c(2013,1), freq=12)
+
+wt=cpius-ex*cpigermany
+adf.test(wt)
+```
+
+After running the adf test on the residuals of cpius-ex*cpigermany, we can see that the residuals are not stationary because the p-value is 35%. This means that there is not a cointegrated relationship and that the PPP does not hold.
+
+**Problem 4**
+
+```{r}
+data=read_excel("../../data/Chapter12_exercises_data.xls", sheet="Exercise 7")
+la=ts(data$ILA, start=c(1975,1), end=c(2012,4), freq=4)
+rv=ts(data$IRV, start=c(1975,1), end=c(2012,4), freq=4)
+
+ci=cbind(la,rv)
+jt=ca.jo(ci)
+summary(jt)
+
+tw=la-1.4315*rv
+adf.test(tw)
+
+plot(tw)
+
+plot(forecast(ets(tw), h=3), xlim=c(2000,2014))
+```
+
+Yes, from the adf test on the johansen test eigenvectors, we can see that they are stationary which means that there is a cointegrated relationship. We can see that the forecast shows that the series is going to mean revert to the long run equilibrium.
+
+**Problem 5**
+
+```{r}
+set.seed(144)
+spec=ugarchspec(
+variance.model = list(model = "sGARCH", garchOrder = c(4, 0)),
+mean.model = list(armaOrder = c(0, 0), include.mean = TRUE),
+distribution.model = "norm")
+setfixed(spec) <- list(
+  mu = 0,
+  omega = 0.1,
+  alpha1 = 0.20,
+  alpha2 = 0.15,
+  alpha3 = 0.10,
+  alpha4 = 0.05
+)
+
+sim <- ugarchpath(spec, n.sim = 2000, n.start = 500, m.sim = 1)
+
+mu  <- as.numeric(fitted(sim))
+eps <- as.numeric(sim@path$seriesSim)
+y   <- mu + eps
+
+sig  <- as.numeric(sigma(sim))
+sig2 <- sig^2
+z   <- eps / sig
+
+plot(y, type="l", main="Simulated ARCH(4) series")
+plot(sig2, type="l", main="Conditional variance sigma_t^2")
+par(mfrow=c(1,2), mar=c(4,4,2,1))
+hist(y, breaks=40, main="Histogram: original series y_t", xlab="y_t")
+hist(z, breaks=40, main="Histogram: standardized series z_t", xlab="z_t")
+
+par(mfrow=c(2,2))
+acf(y,    lag.max=40, ylab="ACF y_t")
+acf(y^2,  lag.max=40, ylab="ACF y_t^2")
+acf(z,    lag.max=40, ylab="ACF z_t")
+acf(z^2,  lag.max=40, ylab="ACF z_t^2")
+```
+
+The standardized series follows a normal distribution better than the original series. The ACF of y_t^2 is relevant and shows that a GARCH model is appropriate. The non-squared ACFs are not relevant, which shows why squaring y_t is necessary.
+
+**Problem 6**
+
+```{r}
+set.seed(144)
+spec_low <- ugarchspec(
+  variance.model = list(model="sGARCH", garchOrder=c(1,1)),
+  mean.model = list(armaOrder=c(0,0), include.mean=TRUE),
+  distribution.model="norm"
+)
+
+setfixed(spec_low) <- list(
+  mu = 0,
+  omega = 0.1,
+  alpha1 = 0.15,
+  beta1  = 0.25
+)
+
+sim_low <- ugarchpath(spec_low, n.sim=2000, n.start=500)
+
+y_low  <- as.numeric(fitted(sim_low)) + as.numeric(sim_low@path$seriesSim)
+sig2_low <- as.numeric(sigma(sim_low))^2
+
+z_low <- y_low / sqrt(sig2_low)
+
+spec_high <- ugarchspec(
+  variance.model = list(model="sGARCH", garchOrder=c(1,1)),
+  mean.model = list(armaOrder=c(0,0), include.mean=TRUE),
+  distribution.model="norm"
+)
+
+setfixed(spec_high) <- list(
+  mu = 0,
+  omega = 0.1,
+  alpha1 = 0.10,
+  beta1  = 0.88
+)
+
+sim_high <- ugarchpath(spec_high, n.sim=2000, n.start=500)
+
+y_high  <- as.numeric(fitted(sim_high)) + as.numeric(sim_high@path$seriesSim)
+sig2_high <- as.numeric(sigma(sim_high))^2
+z_high <- y_high / sqrt(sig2_high)
+
+par(mfrow=c(1,2))
+plot(y_low, type="l", ylab="Low Volatility Series")
+plot(y_high, type="l", ylab="High Volatility Series")
+
+plot(sig2_low, type="l", ylab="Conditional variance sigma_t^2 (Low Volatility)")
+plot(sig2_high, type="l", ylab="Conditional variance sigma_t^2 (High Volatility)")
+
+hist(y_low, breaks=40, main="Histogram: original series y_low")
+hist(y_high, breaks=40, main="Histogram: original series y_high")
+hist(z_low, breaks=40, main="Histogram: standardized series z_low")
+hist(z_high, breaks=40, main="Histogram: standardized series z_high")
+acf(y_low,    lag.max=40, ylab="ACF y_low (Low Volatility)")
+acf(y_high,    lag.max=40, ylab="ACF y_high (High Volatility)")
+acf(z_low,    lag.max=40, ylab="ACF z_low (Low Volatility)")
+acf(z_high,    lag.max=40, ylab="ACF z_high (High Volatility)")
+acf(y_low^2,  lag.max=40, ylab="ACF y_low^2 (Low Volatility)")
+acf(y_high^2,  lag.max=40, ylab="ACF y_high^2 (High Volatility)")
+acf(z_low^2,  lag.max=40, ylab="ACF z_low^2 (Low Volatility)")
+acf(z_high^2,  lag.max=40, ylab="ACF z_high^2 (High Volatility)")
+```
+
+The two histograms are similar, however, the standardized series follows a normal distribution better than the original series. The ACF of the Yt^2 shows that there are volatility dynamics in the series and that a garch model is appropriate. This cannot be seen in the non-squared ACFs.
+
+**Problem 7**
+
+```{r}
+model=ugarchspec(
+variance.model = list(model = "sGARCH", garchOrder = c(2, 2)),
+mean.model = list(armaOrder = c(2, 2), include.mean = TRUE),
+distribution.model = "norm")
+getSymbols("^GSPC", src = "yahoo", from = "2000-01-01", to = "2025-12-31")
+sp500 <- na.omit(Ad(GSPC))
+sp500_old <- sp500["2000-01-01/2010-12-31"]
+sp500_new <- sp500["2015-01-01/2025-12-31"]
+sp500old <- ts(as.numeric(sp500_old), 
+               start = c(2000, 1), 
+               frequency = 252)
+sp500new <- ts(as.numeric(sp500_new), 
+               start = c(2015, 1), 
+               frequency = 252)
+head(sp500old)
+head(sp500new)
+
+returns_old=diff(log(sp500old))*100
+returns_new=diff(log(sp500new))*100
+
+par(mfrow=c(2,1))
+plot(returns_old, main="S&P 500 Old Returns")
+plot(returns_new, main="S&P 500 New Returns")
+
+tsdisplay(returns_old)
+tsdisplay(returns_new)
+
+tsdisplay(returns_old^2)
+tsdisplay(returns_new^2)
+
+modelfit=ugarchfit(spec=model,data=returns_new)
+modelfit
+```
+
+Returns from 2000-2010 has higher volatility in returns compared to returns from 2015-2025. There are definitely times of high and low volatility throughout both periods.
+
+The model after the PACF of the Y^2 looks like it could be a very high order ARCH model. After running ugarch, a garch(2,2) can also be used in conjunction with an arma(2,2) model.
+
+**Problem 8**
+
+```{r}
+modelfor = ugarchforecast(modelfit, data = NULL, n.ahead = 2, n.roll =0 , out.sample = 0)
+modelfor
+plot(modelfor, which=1)
+```
+

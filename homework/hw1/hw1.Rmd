@@ -1,0 +1,498 @@
+---
+title: "HW1"
+author: "Alex Villagomez"
+date: "2026-01-16"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_document:
+    toc: true
+    code_folding: show
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(readxl)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(fable)
+library(stats)
+require(graphics)
+library(dynlm)
+library(tsibble)
+library(quantmod)
+library(gridExtra)
+```
+
+**Problem 1**
+
+```{r}
+# Get S&P 500 data using getSymbols (end date pinned to the submission date)
+getSymbols("^GSPC", src = "yahoo", from = "2000-01-01", to = "2026-01-16")
+
+# Get GDP data from Excel (FRED GDPC1 starts in 1947, so keep 2000 onward)
+GDP <- read_excel("../../data/GDPC1.xlsx", sheet = "Quarterly")
+GDP <- GDP %>% filter(as.Date(observation_date) >= as.Date("2000-01-01"))
+GDP_ts <- ts(GDP$GDPC1, start = c(2000, 1), frequency = 4)
+
+# Convert S&P 500 to quarterly and align to GDP start date
+SP500_prices <- Ad(GSPC)["2000-01-01/"]
+SP500_quarterly <- to.quarterly(SP500_prices, indexAt = "endof", OHLC = TRUE)
+SP500_quarterly_prices <- Cl(SP500_quarterly)
+SP500_ts <- ts(as.numeric(SP500_quarterly_prices), start = 2000, frequency = 4)
+# Keep only the quarters that GDP also covers
+SP500_ts <- window(SP500_ts, end = end(GDP_ts))
+
+# Calculate growth rates
+GDP_growth_ts <- diff(log(GDP_ts)) * 100
+SP500_growth_ts <- diff(log(SP500_ts)) * 100
+
+summary(GDP_growth_ts)
+sd(GDP_growth_ts)
+summary(SP500_growth_ts)
+sd(SP500_growth_ts)
+
+
+par(mfrow=c(1,2))
+hist(GDP_growth_ts,
+     main = "GDP Quarterly Growth Rates",
+     xlab = "Percent",
+     col = "lightblue",
+     breaks = 20)
+hist(SP500_growth_ts,
+     main = "S&P 500 Quarterly Returns",
+     xlab = "Percent",
+     col = "lightgreen",
+     breaks = 20)
+
+cor(GDP_growth_ts, SP500_growth_ts)
+cor.test(GDP_growth_ts, SP500_growth_ts)
+```
+
+For GDP, the mean quarterly growth rate is .54% with a standard deviation of 1.26. Since the mean and median (.62%) are close together, the distribution is fairly symmetric around the mean, apart from the large swings in 2020. The standard deviation is relatively small, which indicates that GDP growth is relatively consistent. 
+
+For the S&P 500, the mean quarterly growth is 1.47% since 2000, which is much higher than GDP growth. The standard deviation is 8.42, which is significantly higher than the standard deviation of GDP growth. This indicates that the S&P 500 returns are more volatile than GDP growth.
+
+The histograms further show that the distribution of GDP quarterly growth rates is more closely concentrated around the mean compared to S&P 500 quarterly growth rates.
+
+After running a correlation test, the correlation is .158 with a p-value of .11. This is not significant at the 5% level, so there is not a strong correlation between GDP quarterly growth and S&P 500 quarterly growth, which indicates that the two growth rates are not contemporaneously correlated.
+
+**Problem 2**
+
+```{r}
+model1<-lm(GDP_growth_ts~SP500_growth_ts)
+summary(model1)
+
+model2<-dynlm(GDP_growth_ts~L(SP500_growth_ts,1))
+summary(model2)
+
+model3<-dynlm(GDP_growth_ts~L(SP500_growth_ts,1)+L(SP500_growth_ts,2)+L(SP500_growth_ts,3)+L(SP500_growth_ts,4))
+summary(model3)
+
+model4<-dynlm(GDP_growth_ts~L(SP500_growth_ts,1)+L(SP500_growth_ts,2)+L(SP500_growth_ts,3)+L(SP500_growth_ts,4)+L(GDP_growth_ts,1))
+summary(model4)
+```
+
+After assessing the R^2 and adjusted R^2 for the four models, I prefer model4 because it has the highest adjusted R^2 out of the four models. Model4 had an R^2 of .2488 and an adjusted R^2 of .208. In models 2 through 4, the first lag of S&P 500 growth is significant, while the second through fourth lags are not.
+
+**Problem 3**
+
+```{r}
+# Read data from Excel
+Problem3_data <- read_excel("../../data/Chapter2_exercises_data.xlsx", sheet = "Exercise 7")
+
+# Convert to annual time series (frequency = 1)
+# Determine start year from data (assuming data starts at first row)
+POV_ts <- ts(Problem3_data$POV, start = c(1959), frequency = 1)
+UNEM_ts <- ts(Problem3_data$UNEM, start = c(1959), frequency = 1)
+
+# Remove NAs
+UNEM_ts <- na.omit(UNEM_ts)
+POV_ts <- na.omit(POV_ts)
+
+POV_growth=na.omit(diff(POV_ts)/head(POV_ts,-1)*100)
+head(POV_growth)
+UNEM_growth=na.omit(diff(UNEM_ts)/head(UNEM_ts,-1)*100)
+head(UNEM_growth)
+
+# Plot time series side by side
+plot1 <- autoplot(POV_ts) + labs(y = "POV", title = "Poverty (in thousands)")
+plot2 <- autoplot(UNEM_ts) + labs(y = "UNEM", title = "Unemployed (in thousands)")
+grid.arrange(plot1, plot2, ncol = 2)
+
+summary(POV_growth)
+sd(POV_growth)
+summary(UNEM_growth)
+sd(UNEM_growth)
+
+# Plot histograms side by side
+par(mfrow=c(1,2))
+hist(POV_growth)
+hist(UNEM_growth)
+
+cor.test(POV_growth, UNEM_growth)
+```
+
+For Poverty, the mean yearly growth rate in poverty from 1960 to 2010 was .0553% with a standard deviation of 5.38, meaning that poverty levels were relatively stable on average, but still exhibited some year to year change. 
+
+Unemployment had a mean annual growth rate of 1.556% and a standard deviation of 14.15. This shows that unemployment has grown quicker from 1960-2010 while also exhibiting much more volatility in its growth rates.
+
+After running a correlation test, the correlation coefficient was .721 with a p-value of 3.516e-9, indicating that Poverty growth rates and Unemployment growth rates are highly correlated.
+
+**Problem 4**
+
+```{r}
+PCE96=read_excel("../../data/PCEC96.xlsx", sheet="Monthly")
+DSPIC96=read_excel("../../data/DSPIC96.xlsx", sheet="Monthly")
+# DSPIC96 starts in 1959, so keep 2007 onward to line up with PCEC96
+DSPIC96 <- DSPIC96 %>% filter(as.Date(observation_date) >= as.Date("2007-01-01"))
+# Convert to time series (use second column if column names don't match)
+rpce_ts <- ts(PCE96[[2]], start = c(2007, 1), frequency = 12)
+rdpi_ts <- ts(DSPIC96[[2]], start = c(2007, 1), frequency = 12)
+
+rpce_growth=na.omit(diff(log(rpce_ts)))
+rdpi_growth=na.omit(diff(log(rdpi_ts)))
+
+# Plot growth rates side by side
+plot1 <- autoplot(rpce_growth) + labs(y = "Growth Rate", title = "Real Personal Consumption Expenditures Growth Rates")
+plot2 <- autoplot(rdpi_growth) + labs(y = "Growth Rate", title = "Real Disposable Personal Income Growth Rates")
+grid.arrange(plot1, plot2, ncol = 2)
+
+sd(rpce_growth)
+sd(rdpi_growth)
+```
+
+a) The standard deviation for growth rates of real personal disposable income was higher than the standard deviation for real personal consumption expenditure. This connects to macroeconomics due to the fact that people are expected to consume based on their long term income rather than their short term income. Households save to account for fluctuations in income and consumption is smooth over time.
+
+b)
+```{r}
+# Uses the growth rates from part a
+cg_ig=lm(rpce_growth~rdpi_growth)
+summary(cg_ig)
+```
+After a 1% increase in real disposable personal income, real personal consumption expenditure is estimated to change by -.079%. This result is statistically significant at the 5% level, but the R^2 is only .024, so income growth explains very little of the month to month variation in consumption growth. The negative sign is driven by 2020-2021, when stimulus payments raised disposable income while consumption fell. Notably, the estimated response of personal consumption is very small compared to the change in disposable income, consistent with the results in part A.
+
+c)
+```{r}
+# Uses the growth rates from part a (kept as ts objects so L() creates the lag)
+model_3=dynlm(rpce_growth~rdpi_growth+L(rdpi_growth,1))
+summary(model_3)
+```
+
+The lagged component is not significant (p-value of .79), so there is no evidence of an adjustment lag: consumption growth does not respond to the previous month's change in disposable income.
+
+**Problem 5**
+
+a)
+```{r}
+par(mfrow=c(1,1))
+# Real GDP quarterly data from FRED (series GDPC1). This reads the copy of the series
+# downloaded from FRED on 2026-01-16 (the same data getSymbols("GDPC1", src = "FRED")
+# returns) so the results do not change with later FRED revisions.
+GDPC1 <- read_excel("../../data/GDPC1.xlsx", sheet = "Quarterly")
+GDPC1 <- GDPC1 %>% filter(as.Date(observation_date) >= as.Date("2000-01-01"))
+GDP_ts <- ts(GDPC1$GDPC1, start = c(2000, 1), frequency = 4)
+plot(GDP_ts)
+```
+
+No, this cannot be weakly stationary of any order because it is not mean reverting: there is a clear upward trend and an increasing mean.
+
+b)
+```{r}
+GDP_growth_ts=diff(GDP_ts)/head(GDP_ts,-1)*100
+plot(GDP_growth_ts)
+```
+
+c)
+```{r}
+par(mfrow=c(1,2))
+gdp_log_ts=log(GDP_ts)
+plot(gdp_log_ts, main="Log of GDP")
+plot(GDP_ts, main="GDP")
+```
+
+After plotting Log of GDP and GDP, both of the plots look very similar, both exhibit linear, slightly exponential trends.
+
+d)
+```{r}
+gdp_log_growth_ts=na.omit(diff(log(GDP_ts)))
+par(mfrow=c(1,2))
+plot(gdp_log_growth_ts, main="Log Differences of GDP")
+plot(GDP_growth_ts, main="GDP Growth Rates")
+```
+
+e) Here, we can see that the log differences of GDP and the GDP growth rates taken in part B are extremely similar, there are no significant changes apart from the values on the y-axis.
+
+**Problem 6**
+
+a and b)
+```{r}
+tourism=read_excel("../../data/tourism.xlsx")
+tourism_ts <- tourism %>% 
+  mutate(Quarter = yearquarter(Quarter)) %>%
+  as_tsibble(
+    index = Quarter,
+    key = c(Region, State, Purpose)
+  )
+head(tourism_ts)
+```
+
+c)
+
+```{r}
+result <- tourism_ts %>%
+  ungroup() %>%
+  as_tibble() %>%
+  group_by(Region, Purpose) %>%
+  summarize(avg_trips = mean(Trips, na.rm = TRUE)) %>%
+  arrange(desc(avg_trips))
+
+head(result, 10)
+```
+
+The highest combination of Region and Purpose was going to the Sydney region for the purpose of visiting, with an average of 747 trips per quarter. 
+
+d)
+```{r}
+tourism_by_state <- tourism_ts %>%
+  as_tibble() %>%
+  group_by(State, Quarter) %>%
+  summarize(
+    Total_Trips = sum(Trips, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  as_tsibble(
+    index = Quarter,
+    key = State
+  ) %>%
+  arrange(Quarter)
+
+head(tourism_by_state)
+
+```
+
+**Problem 7**
+
+a)
+
+```{r}
+dgoog <- gafa_stock |>
+  filter(Symbol == "GOOG", year(Date)>= 2018) |>
+  mutate(trading_day = row_number()) |>
+  update_tsibble(index = trading_day, regular = TRUE) |>
+  mutate(diff = difference(Close))
+head(dgoog, 10)
+```
+
+b)
+
+It was necessary to reindex this trading data because markets are closed on weekends and holidays so it is better to index it by trading day rather than by date to avoid this irregular spacing of days the market is open.
+
+c)
+
+```{r}
+par(mfrow=c(2,1))
+plot(dgoog$diff, main="Daily Changes in Google Closing Price")
+acf(dgoog$diff, na.action=na.pass, main="ACF of Daily Changes in Google Closing Price")
+```
+
+Yes, the changes in stock prices look like white noise. This can be seen in the plot as well as the ACF, where the lags other than 0 are almost all inside the confidence lines, meaning that correlation between lags is not significant and the data is likely white noise.
+
+**Problem 8**
+
+a)
+```{r}
+head(global_economy)
+
+us_gdp <- global_economy %>%
+  filter(Code == "USA") %>%
+  summarize(GDP=GDP, GDP_Capita=GDP/Population) %>%
+  as_tsibble(index=Year) %>%
+  select(Year, GDP_Capita, GDP)
+
+head(us_gdp)
+GDP_Plot <- autoplot(us_gdp, GDP) + labs(y = "GDP", title = "GDP of the United States")
+GDP_Capita_Plot <- autoplot(us_gdp, GDP_Capita) + labs(y = "GDP per Capita", title = "GDP per Capita of the United States")
+GDP_Capita_Log_Plot <- autoplot(us_gdp, log(GDP_Capita)) + labs(y = "Log GDP per Capita", title = "Log GDP per Capita of the United States")
+
+grid.arrange(GDP_Plot, GDP_Capita_Plot, GDP_Capita_Log_Plot, ncol = 3)
+```
+
+In order to correct for the population growth's effect on GDP, I created a new GDP per Capita variable. This was similar, but slightly more linear than GDP. I further logged this GDP per Capita to create quite a linear result which was better than both of the previous.
+
+b)
+
+```{r}
+bulls <- aus_livestock %>%
+  filter(Animal == "Bulls, bullocks and steers", State == "Victoria")
+
+Bulls_Plot <- autoplot(bulls, Count) + labs(y = "Count", title = "Count of Bulls, Bullocks and Steers in Victoria")
+Bulls_Log_Plot <- autoplot(bulls, log(Count)) + labs(y = "Log Count", title = "Log Count of Bulls, Bullocks and Steers in Victoria")
+
+grid.arrange(Bulls_Plot, Bulls_Log_Plot, ncol = 2)
+```
+
+After logging the count, the plot had much less variance. Swings, especially early on were not as drastic and the log(Count) should be preferred to the original.
+
+c)
+
+```{r}
+elec_demand <- vic_elec %>%
+  select(Demand)
+
+Elec_Plot <- autoplot(elec_demand, Demand) + labs(y = "Demand", title = "Demand of Electricity in Victoria")
+Elec_Log_Plot <- autoplot(elec_demand, log(Demand)) + labs(y = "Log Demand", title = "Log Demand of Electricity in Victoria")
+
+grid.arrange(Elec_Plot, Elec_Log_Plot, ncol = 2)
+```
+
+Here, the transformation made the volatility lower which implies that a log transform could be useful in reducing variance.
+
+d)
+
+```{r}
+gas_prod <- aus_production %>%
+  select(Gas)
+
+Gas_Plot <- autoplot(gas_prod, Gas) + labs(y = "Gas Production", title = "Gas Production in Australia")
+Gas_Log_Plot <- autoplot(gas_prod, log(Gas)) + labs(y = "Log Gas Production", title = "Log Gas Production in Australia")
+
+grid.arrange(Gas_Plot, Gas_Log_Plot, ncol = 2)
+```
+
+The log transformation stabilizes the variance in the gas production series, similar to the other series. The logged version shows more consistent fluctuations compared to the original, making it preferred for time series analysis.
+
+
+**Problem 9**
+
+a) There is a clear, strong upward trend in the data. This indicates sustained and consistent labor force growth. The seasonal component does exist, but it is around 2 orders of magnitude smaller than the data indicating that while it is not extremely strong, it is still relevant. The remainder is also quite small and looks like noise, which shows that cycles outside of trend and seasonality are likely not present.
+
+b) The recession can be seen as a deep negative spike in the remainder component. While there is a very slight flattening in the trend, the recession can best be seen through the remainder. 
+
+**Problem 10**
+
+a)
+
+```{r}
+# Load Canadian gas data
+gas_data <- canadian_gas
+
+# Plot using autoplot()
+plot1 <- autoplot(gas_data, Volume)+ labs(y = "Gas Production (billions m³)", title = "Canadian Gas Production")
+
+# Plot using gg_subseries() to see seasonality by month
+plot2 <- gg_subseries(gas_data, Volume)+ labs(y = "Gas Production (billions m³)", title = "Canadian Gas Production by Month")
+
+# Plot using gg_season() to see seasonal patterns
+plot3 <- gg_season(gas_data, Volume)+ labs(y = "Gas Production (billions m³)", title = "Seasonal Pattern of Canadian Gas Production")
+
+# Arrange plots vertically
+grid.arrange(plot1, plot2, plot3, ncol = 1)
+```
+
+b)
+
+```{r}
+# STL decomposition with flexible seasonal window for changing seasonality
+# Using seasonal window = 7 (odd number, allows for changing seasonal pattern)
+gas_stl <- gas_data %>%
+  model(stl = STL(Volume ~ trend(window = 13) + season(window = 7), robust = TRUE))
+
+# Extract components
+gas_components <- gas_stl %>%
+  components()
+
+# Plot the decomposition
+autoplot(gas_components) + labs(title = "STL Decomposition of Canadian Gas Production")
+```
+
+c)
+
+```{r}
+# Plot seasonal component using gg_season() to see how it changes over time
+gg_season(gas_components, season_year) + 
+  labs(y = "Seasonal Component", title = "Seasonal Shape Change Over Time") +
+  guides(colour = guide_legend(title = "Year"))
+```
+
+Over time, the seasonal changes seem to become more pronounced throughout the year. While the seasonal component in past years seemed to be a smooth parabola throughout the year, more recent seasonal components fluctuate much more throughout the year and do not follow a smooth pattern.
+
+d)
+
+```{r}
+gas_seasonally_adjusted <- gas_components %>%
+  mutate(Volume_adj_additive = Volume - season_year,
+         Volume_adj_multiplicative = Volume / (1 + season_year/mean(Volume)))
+
+# Plot original vs seasonally adjusted (both methods)
+plot_original <- autoplot(gas_data, Volume)+ 
+  labs(y = "Gas Production", title = "Original Canadian Gas Production")
+
+plot_adj_add <- autoplot(gas_seasonally_adjusted, Volume_adj_additive)+ 
+  labs(y = "Gas Production", title = "Seasonally Adjusted (Additive)")
+
+plot_adj_mult <- autoplot(gas_seasonally_adjusted, Volume_adj_multiplicative)+ 
+  labs(y = "Gas Production", title = "Seasonally Adjusted (Multiplicative)")
+
+grid.arrange(plot_original, plot_adj_add, plot_adj_mult, ncol = 1)
+```
+
+Yes, I was able to get a plausible seasonally adjusted series. It was able to remove strong fluctuations and preserved a strong upward trend with relatively smooth behavior.
+
+e)
+
+```{r}
+# Step 1: SEATS decomposition using fpp3
+gas_seats <- gas_data %>%
+  model(SEATS = X_13ARIMA_SEATS(Volume))
+
+# Extract SEATS components
+gas_seats_comp <- gas_seats %>%
+  components()
+
+# Plot SEATS seasonally adjusted series
+plot_seats <- autoplot(gas_seats_comp, season_adjust) +
+  labs(y = "Gas Production", title = "SEATS Seasonally Adjusted")
+
+# Step 2: X-11 decomposition using seasonal package
+# Convert tsibble to ts (extract date info)
+gas_ts <- gas_data %>%
+  pull(Volume)%>%
+  ts(start = c(1960, 1), frequency = 12)
+
+# Run X-11
+gas_x11 <- seas(gas_ts, x11 = "")
+
+# Extract X-11 seasonally adjusted series
+gas_x11_adj <- final(gas_x11)
+
+# Convert back to tsibble for plotting
+gas_x11_tsibble <- gas_data %>%
+  mutate(Volume_x11_adj = as.numeric(gas_x11_adj))
+
+# Plot X-11 seasonally adjusted series
+plot_x11 <- autoplot(gas_x11_tsibble, Volume_x11_adj) +
+  labs(y = "Gas Production", title = "X-11 Seasonally Adjusted")
+
+# Step 3: Recreate STL decomposition for comparison
+gas_stl <- gas_data %>%
+  model(stl = STL(Volume ~ trend(window = 13) + season(window = 7), robust = TRUE))
+
+gas_stl_comp <- gas_stl %>%
+  components()
+
+# Plot STL seasonally adjusted series
+plot_stl_adj <- autoplot(gas_stl_comp, Volume - season_year) +
+  labs(y = "Gas Production", title = "STL Seasonally Adjusted")
+
+# Arrange all plots
+grid.arrange(plot_stl_adj, plot_seats, plot_x11, ncol = 1)
+```
+
+All three of the adjusted series are very similar and removed seasonality in very similar ways. The SEATS trend was the most smooth while X-11 and the STL seasonally adjusted series preserved some noise within the trend. All three exhibited nearly identical trend trajectories, the only minor differences being in the level of noise.
+
